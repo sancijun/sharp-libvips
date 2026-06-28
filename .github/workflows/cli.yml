@@ -2,9 +2,6 @@ name: CLI
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
     tags:
       - 'cli-v*'
 permissions: {}
@@ -23,12 +20,8 @@ jobs:
         include:
           - os: 'ubuntu-24.04'
             platform: 'linux-x64'
-          - os: 'ubuntu-24.04'
-            platform: 'linuxmusl-x64'
           - os: 'ubuntu-24.04-arm'
             platform: 'linux-arm64v8'
-          - os: 'ubuntu-24.04-arm'
-            platform: 'linuxmusl-arm64v8'
           - os: 'macos-15-intel'
             platform: 'darwin-x64'
           - os: 'macos-15'
