@@ -12,6 +12,17 @@ Most people will not need to do this; proceed with caution.
 
 Run the top-level [build script](build.sh) without parameters for help.
 
+## Portable CLI tarballs
+
+This fork can also build macOS/Linux libvips command-line tarballs for desktop
+app bundling, e.g. Tauri apps that need a portable `vips` executable and its
+shared libraries.
+
+Run [build-cli.sh](build-cli.sh) to create `libvips-cli-<platform>.tar.gz`.
+See [CLI-BUILD.md](CLI-BUILD.md) for supported platforms, local macOS M4 builds,
+Linux Docker builds, automatic GitHub Release artifacts, and Tauri packaging
+notes.
+
 ### Linux
 
 One [build script](build/posix.sh) is used to (cross-)compile

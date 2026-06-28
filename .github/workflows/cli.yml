@@ -1,0 +1,106 @@
+name: CLI
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'cli-v*'
+permissions: {}
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    permissions:
+      contents: read
+    name: cli-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'ubuntu-24.04'
+            platform: 'linux-x64'
+          - os: 'ubuntu-24.04'
+            platform: 'linuxmusl-x64'
+          - os: 'ubuntu-24.04-arm'
+            platform: 'linux-arm64v8'
+          - os: 'ubuntu-24.04-arm'
+            platform: 'linuxmusl-arm64v8'
+          - os: 'macos-15-intel'
+            platform: 'darwin-x64'
+          - os: 'macos-15'
+            platform: 'darwin-arm64v8'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pipx install meson
+          brew install automake nasm
+      - name: Build ${{ matrix.platform }} CLI
+        run: ./build-cli.sh ${{ matrix.platform }}
+      - name: Upload ${{ matrix.platform }} CLI artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: libvips-cli-${{ matrix.platform }}
+          path: 'libvips-cli-${{ matrix.platform }}.tar.gz'
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+  release:
+    permissions:
+      contents: write
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Prepare release metadata
+        id: release
+        run: |
+          source versions.properties
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=libvips CLI ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=cli-latest" >> "$GITHUB_OUTPUT"
+            echo "name=libvips CLI latest" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f cli-latest "$GITHUB_SHA"
+            git push --force origin refs/tags/cli-latest
+          fi
+          {
+            echo "body<<EOF"
+            echo "libvips ${VERSION_VIPS} portable CLI artifacts for macOS and Linux."
+            echo
+            echo "Built from ${GITHUB_SHA}."
+            echo
+            echo "Windows users should use the official libvips build-win64-mxe release."
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: libvips-cli-*
+          merge-multiple: true
+      - name: Create or update CLI release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.name }}
+          body: ${{ steps.release.outputs.body }}
+          artifacts: 'libvips-cli-*.tar.gz'
+          artifactContentType: application/gzip
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: ${{ steps.release.outputs.make_latest }}

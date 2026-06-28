@@ -19,6 +19,8 @@ without_prerelease() {
 }
 
 # Environment / working directories
+BUILD_CLI="${BUILD_CLI:-false}"
+
 case ${PLATFORM} in
   linux*)
     LINUX=true
@@ -65,7 +67,7 @@ export LDFLAGS="-L${TARGET}/lib"
 # On Linux, we need to create a relocatable library
 # Note: this is handled for macOS using the `install_name_tool` (see below)
 if [ "$LINUX" = true ]; then
-  export LDFLAGS+=" -Wl,--gc-sections -Wl,-rpath=\$ORIGIN/"
+  export LDFLAGS+=" -Wl,--gc-sections -Wl,-rpath=\$ORIGIN/ -Wl,-rpath=\$ORIGIN/../lib"
 fi
 
 if [ "$DARWIN" = true ]; then
@@ -383,8 +385,15 @@ if [ "$LINUX" = true ]; then
   # See: https://github.com/lovell/sharp/issues/2535#issuecomment-766400693
   printf "{local:g_param_spec_types;};" > vips.map
 fi
-# Disable building man pages, gettext po files, tools, and (fuzz-)tests
-sed -i'.bak' "/subdir('man')/{N;N;N;N;d;}" meson.build
+# Disable building man pages, gettext po files, and tests.
+# The sharp package build also disables libvips command-line tools; the CLI
+# package build keeps them so the resulting tarball can be used as a Tauri
+# sidecar bundle.
+if [ "$BUILD_CLI" = true ]; then
+  sed -i'.bak' "/subdir('man')/d; /subdir('po')/d; /subdir('test')/d; /subdir('fuzz')/d" meson.build
+else
+  sed -i'.bak' "/subdir('man')/{N;N;N;N;d;}" meson.build
+fi
 CFLAGS="${CFLAGS} -O3" CXXFLAGS="${CXXFLAGS} -O3" meson setup _build --default-library=shared --buildtype=release --strip --prefix=${TARGET} ${MESON} \
   -Ddeprecated=false -Dexamples=false -Dauto_features=enabled -Dintrospection=disabled -Dmodules=disabled -Dcfitsio=disabled -Dfftw=disabled \
   -Djpeg-xl=disabled ${WITHOUT_HIGHWAY:+-Dhighway=disabled} -Dorc=disabled -Dmagick=disabled -Dmatio=disabled -Dnifti=disabled -Dopenexr=disabled \
@@ -423,11 +432,11 @@ function copydeps {
     [ ! -f "$PWD/$base_dep" ] && echo "$base_dep does not exist in $PWD" && continue
     echo "$base depends on $base_dep"
 
-    if [ ! -f "$dest_dir/$base_dep" ]; then
-      if [ "$DARWIN" = true ]; then
-        install_name_tool -change $dep @rpath/$base_dep $dest_dir/$base
-      fi
+    if [ "$DARWIN" = true ]; then
+      install_name_tool -change $dep @rpath/$base_dep $dest_dir/$base
+    fi
 
+    if [ ! -f "$dest_dir/$base_dep" ]; then
       # Call this function (recursive) on each dependency of this library
       copydeps $base_dep $dest_dir
     fi
@@ -442,6 +451,46 @@ if [ "$LINUX" = true ]; then
   readelf -Ws ${VIPS_CPP_DEP} | c++filt | grep -qF "::__cxx11::" || (echo "$VIPS_CPP_DEP mistakenly uses the C++03 ABI" && exit 1)
 fi
 copydeps ${VIPS_CPP_DEP} ${TARGET}/lib-filtered
+
+copybin() {
+  local base=$1
+  local dest_dir=$2
+
+  cp -L "${TARGET}/bin/$base" "$dest_dir/$base"
+  chmod 755 "$dest_dir/$base"
+
+  if [ "$LINUX" = true ]; then
+    local dependencies=$(readelf -d "$dest_dir/$base" | grep NEEDED | awk '{ print $5 }' | tr -d '[]')
+  elif [ "$DARWIN" = true ]; then
+    install_name_tool -add_rpath @executable_path/../lib "$dest_dir/$base" 2>/dev/null || true
+    local dependencies=$(otool -LX "$dest_dir/$base" | awk '{print $1}' | grep $TARGET)
+  fi
+
+  for dep in $dependencies; do
+    base_dep=$(basename $dep)
+
+    [ ! -f "${TARGET}/lib/$base_dep" ] && echo "$base_dep does not exist in ${TARGET}/lib" && continue
+    echo "$base depends on $base_dep"
+
+    if [ "$DARWIN" = true ]; then
+      install_name_tool -change $dep @rpath/$base_dep "$dest_dir/$base"
+    fi
+
+    if [ ! -f "${TARGET}/lib-filtered/$base_dep" ]; then
+      (cd ${TARGET}/lib && copydeps $base_dep ${TARGET}/lib-filtered)
+    fi
+  done
+}
+
+if [ "$BUILD_CLI" = true ]; then
+  mkdir ${TARGET}/bin-filtered
+  for tool in vips vipsthumbnail vipsheader vipsedit vipsprofile; do
+    if [ -f "${TARGET}/bin/$tool" ]; then
+      copybin "$tool" ${TARGET}/bin-filtered
+    fi
+  done
+  [ -x "${TARGET}/bin-filtered/vips" ] || (echo "vips CLI was not built" && exit 1)
+fi
 
 # Create JSON file of version numbers
 cd ${TARGET}
@@ -483,11 +532,23 @@ $CURL -O https://raw.githubusercontent.com/lovell/sharp-libvips/main/THIRD-PARTY
 ls -al lib
 rm -rf lib
 mv lib-filtered lib
-tar chzf ${PACKAGE}/sharp-libvips-${PLATFORM}.tar.gz \
-  include \
-  lib \
-  *.json \
-  THIRD-PARTY-NOTICES.md
+if [ "$BUILD_CLI" = true ]; then
+  ls -al bin-filtered
+  rm -rf bin
+  mv bin-filtered bin
+  tar chzf ${PACKAGE}/libvips-cli-${PLATFORM}.tar.gz \
+    bin \
+    include \
+    lib \
+    *.json \
+    THIRD-PARTY-NOTICES.md
+else
+  tar chzf ${PACKAGE}/sharp-libvips-${PLATFORM}.tar.gz \
+    include \
+    lib \
+    *.json \
+    THIRD-PARTY-NOTICES.md
+fi
 
 # Allow tarballs to be read outside container
-chmod 644 ${PACKAGE}/sharp-libvips-${PLATFORM}.tar.*
+chmod 644 ${PACKAGE}/*-${PLATFORM}.tar.*

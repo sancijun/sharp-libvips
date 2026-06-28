@@ -12,6 +12,9 @@ if [ $# -lt 1 ]; then
   echo "Usage: $0 PLATFORM"
   echo "Build shared libraries for libvips and its dependencies"
   echo
+  echo "Set BUILD_CLI=true to build a portable libvips CLI tarball"
+  echo "for macOS/Linux instead of the sharp npm library tarball."
+  echo
   echo "Possible values for PLATFORM are:"
   echo "- win32-ia32"
   echo "- win32-x64"
@@ -96,6 +99,6 @@ for flavour in linux-x64 linuxmusl-x64 linux-armv6 linux-arm64v8 linuxmusl-arm64
   if [ $PLATFORM = "all" ] || [ $PLATFORM = $flavour ]; then
     echo "Building $flavour..."
     docker build --pull -t vips-dev-$flavour platforms/$flavour
-    docker run --rm -v $PWD:/packaging vips-dev-$flavour sh -c "/packaging/build/posix.sh"
+    docker run --rm -e "BUILD_CLI=${BUILD_CLI:-false}" -v $PWD:/packaging vips-dev-$flavour sh -c "/packaging/build/posix.sh"
   fi
 done
